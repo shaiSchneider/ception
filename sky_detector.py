@@ -147,7 +147,6 @@ class SkyDetector:
     def predict(self, img_input):
         # record the global image size:
         img_input = Image.fromarray(img_input)
-        img_input = img_input.convert('RGB')
         W_global, H_global = img_input.size
         scene_index = 2
         img_resized_list, segSize = self.datapreprocess(img_input, self.imgSizes, self.imgMaxSize, self.padding_constant)

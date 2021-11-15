@@ -6,6 +6,7 @@ import tqdm
 import numpy as np
 
 if __name__ == "__main__":
+    eps = 1e-3
     cv2.namedWindow("RGB", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Ground", cv2.WINDOW_NORMAL)
@@ -17,11 +18,12 @@ if __name__ == "__main__":
         img_path = os.path.join(base_dir, file)
         img = cv2.imread(img_path)
         img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-        depth = depth_predictor.predict(img.copy())
-        depth = 1./depth
-        depth[depth == depth.max()] = 0
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        depth = depth_predictor.predict(rgb.copy())
+        depth = 1./(depth + eps)
+        depth[depth > 0.8 * depth.max()] = 0
         depth[np.isnan(depth)] = 0
-        sky_mask = sky_predictor.predict(img.copy())
+        sky_mask = sky_predictor.predict(rgb.copy())
         ground_mask = sky_predictor.get_ground_mask(sky_mask)
         depth = depth * ground_mask
         cv2.imshow("RGB", img)
