@@ -1,6 +1,6 @@
 import torch
 import cv2
-import matplotlib.pyplot as plt
+
 
 class MidasDepth:
     def __init__(self, model_type="DPT_Large"):
@@ -23,9 +23,7 @@ class MidasDepth:
             self.transform = self.midas_transforms.small_transform
 
     def predict(self, img):
-
         input_batch = self.transform(img).to(self.device)
-
         with torch.no_grad():
             prediction = self.midas(input_batch)
 
@@ -35,14 +33,15 @@ class MidasDepth:
                 mode="bicubic",
                 align_corners=False,
             ).squeeze()
-
         output = prediction.cpu().numpy()
-    
         return output
 
 if __name__ == "__main__":
+    cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
     depth_predictor = MidasDepth()
     img_path = r'example/0.jpg'
-    depth = depth_predictor.predict(cv2.imread(img_path))
-    cv2.imshow("",depth)
+    img = cv2.imread(img_path)
+    img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    depth = depth_predictor.predict(img)
+    cv2.imshow("Depth",depth)
     cv2.waitKey(0)

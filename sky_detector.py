@@ -1,23 +1,18 @@
 '''
 This code is to run simple version of inference model of SOTA semantic segmentation with pytorch
 '''
-
-import os
 import numpy as np
-import pdb
 import torch
 import torch.nn as nn
 from torchvision import transforms
 import cv2
-import csv
 from PIL import Image
-import matplotlib.pyplot as plt
-from scipy.io import loadmat
+
 # MIT libraries
 from semantic_segmentation.mit_semseg.models import ModelBuilder, SegmentationModule
-from semantic_segmentation.mit_semseg.utils import colorEncode
 from semantic_segmentation.mit_semseg.lib.utils import as_numpy
 from semantic_segmentation.mit_semseg.lib.nn import async_copy_to
+
 
 class SkyDetector:
     def __init__(self):
@@ -25,22 +20,13 @@ class SkyDetector:
         self.arch_encoder = 'hrnetv2'
         self.arch_decoder = 'c1'
         self.fc_dim = 720
-        self.encoder_weights_path = './ade20k-hrnetv2-c1/encoder_epoch_30.pth'
-        self.decoder_weights_path = './ade20k-hrnetv2-c1/decoder_epoch_30.pth'
+        self.encoder_weights_path = './semantic_segmentation/ade20k-hrnetv2-c1/encoder_epoch_30.pth'
+        self.decoder_weights_path = './semantic_segmentation/ade20k-hrnetv2-c1/decoder_epoch_30.pth'
         self.num_class = 150
         self.imgSizes = (300, 375, 450, 525, 600) # multi-scale prediction
         self.padding_constant = 32
         self.imgMaxSize = 1000
-        self.gpu=0
-
-        # read color table:
-        colors = loadmat('./data/color150.mat')['colors']
-        names = {}
-        with open('./data/object150_info.csv') as f:
-            reader = csv.reader(f)
-            next(reader)
-            for row in reader:
-                names[int(row[0])] = row[5].split(";")[0]
+        self.prob_threshold = 0.99
 
         # Build Models:
         self.net_encoder = self.build_encoder(arch_encoder=self.arch_encoder, fc_dim=self.fc_dim, weights=self.encoder_weights_path)
@@ -142,58 +128,63 @@ class SkyDetector:
 
         return img_resized_list, segSize
 
-    def scene_filter(self, img_ori,prob,scene_index,W_global,H_global):
-        prob_threshold = 0.99
+    def scene_filter(self, img_ori, prob, W_global, H_global):
+        scene_index = 0 # sky
         img_ori = np.array(img_ori)
         if img_ori.shape[0] > 2048 or img_ori.shape[1] > 2048:
             img_ori = cv2.resize(img_ori,(2048,2048))
         mask = np.zeros((img_ori.shape[0],img_ori.shape[1]))
-        mask[prob[scene_index] > prob_threshold] = 1
+        mask[prob[scene_index] > self.prob_threshold] = 1
         mask.astype('uint8')
 
         # resize to global if necessary:
-        if img_ori.shape[0] != H_global and img_ori.shape[1] != W_global:
+        if img_ori.shape[0] != H_global or img_ori.shape[1] != W_global:
             img_ori = cv2.resize(img_ori,(W_global,H_global))
             mask = cv2.resize(mask,(W_global,H_global))
 
         return img_ori, mask
 
-    def predict(self, img):
+    def predict(self, img_input):
         # record the global image size:
-        img = Image.fromarray(img)
-        img = img.convert('RGB')
-        W_global, H_global = img.size
-
-        img_resized_list, segSize = self.datapreprocess(img, self.imgSizes, self.imgMaxSize, self.padding_constant)
+        img_input = Image.fromarray(img_input)
+        img_input = img_input.convert('RGB')
+        W_global, H_global = img_input.size
+        scene_index = 2
+        img_resized_list, segSize = self.datapreprocess(img_input, self.imgSizes, self.imgMaxSize, self.padding_constant)
         
         with torch.no_grad():
-            scores = torch.zeros(1, self.num_class, segSize[0], segSize[1])
-            if self.gpu >= 0: # use GPU memory to handle data
-                scores = async_copy_to(scores, self.gpu)
+            scores = torch.zeros(1, 1, segSize[0], segSize[1])
 
             for img in img_resized_list:
                 feed_dict = {}
                 feed_dict['img_data'] = img
-                if self.gpu >= 0: # use GPU memory to handle data
-                    feed_dict = async_copy_to(feed_dict, self.gpu)
+                feed_dict = async_copy_to(feed_dict, self.device)
                 # forward pass
                 pred_tmp = self.segmentation_module(feed_dict, segSize=segSize)
+                pred_tmp = pred_tmp[:, scene_index, :, :]
+                pred_tmp = pred_tmp.cpu()
                 scores = scores + pred_tmp / len(self.imgSizes)
-            _, pred = torch.max(scores, dim=1)
-            pred = as_numpy(pred.squeeze(0).cpu())
 
             # sky filtering:
-            scene_index = 2 # sky index = 2
             prob = as_numpy(scores.squeeze(0).cpu())
-            img_ori, sky_mask = self.scene_filter(img ,prob,scene_index,W_global,H_global)
+            img_ori, sky_mask = self.scene_filter(img_input ,prob ,W_global,H_global)
         
         return sky_mask
 
+    def get_ground_mask(self, sky_mask):
+        ground_mask = np.copy(sky_mask)
+        ground_mask = ground_mask - 1
+        ground_mask *= -1
+        return ground_mask
 
 if __name__ == "__main__":
+    cv2.namedWindow("sky", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("ground", cv2.WINDOW_NORMAL)
     sky_predictor = SkyDetector()
     img_path = r'example/0.jpg'
     img = cv2.imread(img_path)
     sky_mask = sky_predictor.predict(img)
-    cv2.imshow("",sky_mask)
+    ground_mask = sky_predictor.get_ground_mask(sky_mask)
+    cv2.imshow("sky",sky_mask * 255)
+    cv2.imshow("ground",sky_mask * 255)
     cv2.waitKey(0)
